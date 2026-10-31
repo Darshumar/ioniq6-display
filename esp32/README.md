@@ -1,5 +1,7 @@
 # Ioniq 6 Anzeige auf dem ESP32
 
+*Deutsch · [English](README.en.md)*
+
 Firmware für das **Waveshare ESP32-S3-Touch-LCD-4.3** (ESP32-S3, 4,3"-Display quer 800×480, 16 MB Flash, 8 MB PSRAM, Touch GT911, microSD). Das Board verbindet sich per Bluetooth mit dem OBD-Adapter und zeigt die Werte auf acht Seiten.
 
 Stand: **Firmware 86** (31.10.2026).

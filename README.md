@@ -1,5 +1,7 @@
 # Ioniq 6 Anzeige (ESP32)
 
+*Deutsch · [English](README.en.md)*
+
 Akku- und Fahrdaten des Hyundai Ioniq 6 über einen Bluetooth-OBD-Adapter (ELM327 mit BLE, getestet mit dem Vgate iCar 2) auslesen und im Auto anzeigen: auf einem **Waveshare ESP32-S3-Touch-LCD-4.3** (4,3", 800×480) in einem 3D-gedruckten Gehäuse mit Akku und Ständer für die Ablage vor den Getränkehaltern.
 
 Hobbyprojekt ohne kommerzielle Absicht, nicht von Hyundai. Benutzung auf eigene Gefahr; der Adapter liest nur, er schreibt nichts ins Auto.

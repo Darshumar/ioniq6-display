@@ -1,5 +1,7 @@
 # Gehäuse Waveshare 4.3" mit Akku und Ständer
 
+*Deutsch · [English](README.en.md)*
+
 ![Display im Ständer, Blick vom Fahrersitz](ablage_display_fahrer.png)
 
 Stand 24.10.2026: **fertig. Wanne und Ständer mit Nase gedruckt, alles passt**
