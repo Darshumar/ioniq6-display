@@ -102,6 +102,11 @@ int main() {
     cs.curve_soc[cs.curve_n] = soc; cs.curve_kw[cs.curve_n++] = kw;
   }
   ui::dashboard(ch, c, cs, t, cells, veh, demo_log, true, 2); save("page3_laden.ppm");
+  {  // Akku-Seite beim DC-Laden, Auto heizt den kalten Akku vor (31.10.)
+    BmsData h = ch; h.temp_min = 14; h.temp_max = 17; h.coolant_inlet = 30; h.cell_v_min = 3.84f;
+    for (int i = 0; i < 16; i++) h.modules[i] = 14 + i % 4;
+    ui::dashboard(h, c, cs, t, cells, veh, demo_log, true, 1); save("akku_laden_heizen.ppm");
+  }
   {  // AC-Ladung an der Wallbox: Netz und Bordlader statt Saeule
     Vehicle ac = veh; ac.dc = false; ac.ac = true; ac.ac_inlet_c = 31;
     ac.has_obc = true; ac.obc_ac_v = 231; ac.obc_ac_a = 15.9f; ac.obc_ac_hz = 50; ac.obc_c[0] = 41; ac.obc_c[1] = 43;

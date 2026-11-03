@@ -663,6 +663,12 @@ void page_charge(const BmsData& d, const ChargeSession& cs, const Vehicle& v) {
   if (ac && v.has_obc) {
     snprintf(buf, sizeof buf, T("Netz %.0f V · %.1f A · %.0f Hz", "Grid %.0f V · %.1f A · %.0f Hz"), v.obc_ac_v, v.obc_ac_a, v.obc_ac_hz);
     text(X2, Y_SUB, F_SMALL, C_DIM, de(buf));
+  } else if (dc && v.has_charge && cs.active && v.evse_v > 0) {
+    // Die Saeule liefert mehr als im Akku ankommt, solange das Auto den Akku
+    // heizt (31.10./02.11.: 4-6 kW), sonst gleich (+-1,5 kW)
+    snprintf(buf, sizeof buf, T("%.0f V · %.0f A · Säule %.0f kW", "%.0f V · %.0f A · charger %.0f kW"),
+             d.voltage, -d.current, v.evse_v * v.evse_a / 1000);
+    text(X2, Y_SUB, F_SMALL, C_DIM, de(buf));
   } else {
     snprintf(buf, sizeof buf, "%.0f V · %.0f A", d.voltage, -d.current);
     text(X2, Y_SUB, F_LABEL, C_DIM, buf);
