@@ -178,8 +178,11 @@ Thermal battery_thermal(const BmsData& d) {
   if (!d.coolant_pump) return Thermal::Off;
   // Im Stand zeigt die Heizleistung (~4,5 kW) das Heizen eindeutig; die
   // Temperatur taugt dort nicht (warmes Restwasser beim Anlaufen der Pumpe).
+  // Beim Laden ist die Leistung negativ: dann wie beim Fahren ueber die
+  // Einlasstemperatur (DC-Laden 31.10./02.11.: Einlass bis 41 C, Akku 14-26 C).
   bool parked = d.rpm_rear == 0 && d.rpm_front == 0;
-  bool heating = parked ? d.power_kw >= 3.0f : d.coolant_inlet >= d.temp_max + 3;
+  bool charging = d.power_kw <= -1.0f;
+  bool heating = parked && !charging ? d.power_kw >= 3.0f : d.coolant_inlet >= d.temp_max + 3;
   if (heating) return Thermal::Heating;
   if (d.coolant_inlet <= d.temp_min - 3) return Thermal::Cooling;
   return Thermal::Pump;
