@@ -5,7 +5,7 @@
 
 namespace {
 constexpr float SPEEDUP = 8;  // simulierte Sekunden je echter Sekunde
-constexpr float REV_PER_KM = 10.65f * 1000.0f / 2.23f;
+constexpr float REV_PER_KM = 10.65f * 1000.0f / 2.25f;  // wie speed_kmh in decode.cpp
 constexpr float USABLE_KWH = 74.0f;
 
 // Geschwindigkeitsprofil Landstrasse/Autobahn in km/h

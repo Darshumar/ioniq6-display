@@ -224,7 +224,7 @@ void diag(const char* line) {
     }
     File f = SD.open(name, FILE_WRITE);
     if (!f) return;
-    f.print("time;uptime_s;flash_ops;ble;heap_int_free;heap_int_min;psram_free\n");
+    f.print("time;uptime_s;flash_ops;ble;heap_int_free;heap_int_min;psram_free;cycles;cycle_ms;cycle_max_ms;bms_ms;queries;query_fails;query_ms;header_switches;draw_ms;atat\n");
     f.close();
     diag_name = name;
   }

@@ -178,8 +178,11 @@ Thermal battery_thermal(const BmsData& d) {
   if (!d.coolant_pump) return Thermal::Off;
   // Im Stand zeigt die Heizleistung (~4,5 kW) das Heizen eindeutig; die
   // Temperatur taugt dort nicht (warmes Restwasser beim Anlaufen der Pumpe).
+  // Beim Laden ist die Leistung negativ: dann wie beim Fahren ueber die
+  // Einlasstemperatur (DC-Laden 31.10./02.11.: Einlass bis 41 C, Akku 14-26 C).
   bool parked = d.rpm_rear == 0 && d.rpm_front == 0;
-  bool heating = parked ? d.power_kw >= 3.0f : d.coolant_inlet >= d.temp_max + 3;
+  bool charging = d.power_kw <= -1.0f;
+  bool heating = parked && !charging ? d.power_kw >= 3.0f : d.coolant_inlet >= d.temp_max + 3;
   if (heating) return Thermal::Heating;
   if (d.coolant_inlet <= d.temp_min - 3) return Thermal::Cooling;
   return Thermal::Pump;
@@ -285,7 +288,7 @@ float ChargeSession::minutes_to(float target_soc, const BmsData& d) const {
 }
 
 float speed_kmh(const BmsData& d) {
-  constexpr float REV_PER_KM = 10.65f * 1000.0f / 2.23f;  // Motorumdrehungen je km
+  constexpr float REV_PER_KM = 10.65f * 1000.0f / 2.25f;  // Motorumdrehungen je km (2,25 m Abrollumfang, an 7E2 abgeglichen)
   return fabsf((float)d.rpm_rear) * 60.0f / REV_PER_KM;
 }
 
@@ -417,8 +420,11 @@ bool decode_220111(const std::vector<uint8_t>& p, Vehicle& v) {
   return true;
 }
 
+// Seit FW 89 zuerst aus der Drehzahl: die kommt in jedem Durchlauf, 7E2 nur alle
+// 2 s (Logs 02.-04.11.: Drehzahl-Tempo / 7E2-Tempo im Mittel 1,00, +-5 %)
 float speed_kmh(const BmsData& d, const Vehicle& v) {
-  return v.has_speed ? fabsf(v.speed_kmh) : speed_kmh(d);
+  if (d.rpm_rear != 0) return speed_kmh(d);
+  return v.has_speed ? fabsf(v.speed_kmh) : 0;
 }
 
 void TripLog::add(const Trip& t, uint32_t ym) {
