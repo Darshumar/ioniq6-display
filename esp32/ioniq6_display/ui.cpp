@@ -1107,8 +1107,8 @@ void page_temps(const BmsData& d, const Vehicle& v) {
 
 
 // "Auto": Draufsicht (vorn links) in Biophilic Blue; offene Tueren klappen
-// aus, offene Klappen werden orange, Abblendlicht als Lichtkegel, Ruecklicht
-// und Bremslicht als rote Leiste. Masse in Pixeln des 500x206-Bildes.
+// aus, offene Klappen werden orange, Standlicht als helle Punkte vorn,
+// Abblend- und Fernlicht als Lichtkegel, Ruecklicht und Bremslicht als rote Leiste. Masse in Pixeln des 500x206-Bildes.
 constexpr int CAR_X = 236, CAR_Y = 132;
 uint16_t mix(uint8_t r0, uint8_t g0, uint8_t b0, uint8_t r1, uint8_t g1, uint8_t b1, int a, int n) {
   return gfx->color565(r0 + (r1 - r0) * a / n, g0 + (g1 - g0) * a / n, b0 + (b1 - b0) * a / n);
@@ -1173,20 +1173,38 @@ void page_car(const Vehicle& v) {
       }
     }
   }
-  // Abblendlicht: Kegel nach vorn (links), zum Ende hin schwaecher und breiter
-  if (v.low_beam) {
-    constexpr int REACH = 170;
+  // Scheinwerfer: Kegel nach vorn (links), zum Ende hin schwaecher und breiter;
+  // Fernlicht weiter, heller und weisser. Ohne Antwort auf 22BC09 wie bisher:
+  // Licht an = Abblendlicht.
+  bool high = v.has_beam && v.high_beam;
+  bool low = v.has_beam ? v.low_beam : v.lights_on;
+  bool parking = v.lights_on && !low && !high;  // nur Standlicht
+  if (low || high) {
+    int reach = high ? 230 : 170;
     for (int side = 0; side < 2; side++) {
       int sy = CAR_Y + (side ? 176 : 30), dir = side ? 1 : -1;
-      for (int i = 0; i < REACH; i++) {
-        int h = 4 + i * 44 / REACH, mid = sy + dir * i / 7;  // leicht nach aussen
-        gfx->drawFastVLine(CAR_X + 8 - i, mid - h / 2, h, mix(8, 20, 24, 255, 236, 150, REACH - i, REACH + 30));
+      for (int i = 0; i < reach; i++) {
+        int h = 4 + i * (high ? 36 : 44) / reach, mid = sy + dir * i / (high ? 10 : 7);  // leicht nach aussen
+        uint16_t c = high ? mix(8, 20, 24, 250, 250, 235, reach - i, reach + 10)
+                          : mix(8, 20, 24, 255, 236, 150, reach - i, reach + 30);
+        gfx->drawFastVLine(CAR_X + 8 - i, mid - h / 2, h, c);
       }
+    }
+  }
+  // Standlicht (Positionsleuchten): helle Punkte an den Scheinwerfern mit
+  // kleinem Schein, kein Kegel
+  if (v.lights_on) {
+    for (int side = 0; side < 2; side++) {
+      int sy = CAR_Y + (side ? 176 : 30);
+      if (parking)
+        for (int g = 1; g <= 16; g++)
+          gfx->drawFastVLine(CAR_X + 6 - g, sy - 9 - g / 2, 18 + g, mix(8, 20, 24, 255, 236, 180, 17 - g, 24));
+      for (int k = -1; k <= 1; k++) gfx->fillRect(CAR_X + 6, sy + k * 6 - 2, 4, 4, gfx->color565(255, 244, 210));
     }
   }
   // Rueckleuchten: Band an der Hinterkante entlang ihrer Rundung, an den
   // Ecken als "Parametric Pixels"; Bremslicht heller mit Schein nach hinten
-  if (v.low_beam || v.brake_light) {
+  if (v.lights_on || v.brake_light) {
     constexpr int Y0 = 16, N = CAR_H - 2 * Y0;
     static int16_t edge[N];
     static bool have_edge = false;
@@ -1241,13 +1259,27 @@ void page_car(const Vehicle& v) {
   if (open.empty()) snprintf(buf, sizeof buf, "%s", T("Alles zu", "All closed"));
   else snprintf(buf, sizeof buf, "%s %s", T("Offen:", "Open:"), open.c_str());
   text(PAD, 438, F_MED, open.empty() ? C_GREEN : C_ORANGE, buf);
-  snprintf(buf, sizeof buf, "%s%s", v.low_beam ? T("Licht an", "Lights on") : T("Licht aus", "Lights off"),
-           v.brake_light ? T(", Bremse", ", brake") : "");
-  text_right(W - PAD, 438, F_MED, v.low_beam ? C_YELLOW : C_DIM, buf);
-  // Rohdaten zum Bestaetigen der Bits am Auto (Tuer oeffnen, Bit muss wechseln)
+  int open_w = text_width(F_MED, buf);
+  const char* light = high      ? T("Fernlicht", "High beam")
+                      : low     ? (v.has_beam ? T("Abblendlicht", "Low beam") : T("Licht an", "Lights on"))
+                      : parking ? T("Standlicht", "Parking lights")
+                                : T("Licht aus", "Lights off");
+  snprintf(buf, sizeof buf, "%s%s", light, v.brake_light ? T(", Bremse", ", brake") : "");
+  // passt es nicht neben die offenen Tueren, eine Zeile hoeher
+  int ly = PAD + open_w + 24 + text_width(F_MED, buf) > W - PAD ? 404 : 438;
+  text_right(W - PAD, ly, F_MED, high ? C_FG : (low || parking) ? C_YELLOW : C_DIM, buf);
+  // Rohdaten zum Bestaetigen der Bits am Auto (Tuer oeffnen, Licht schalten)
   snprintf(buf, sizeof buf, "770 BC03: %02X %02X %02X %02X   BC10: %d", v.body_raw[0], v.body_raw[1], v.body_raw[2],
            v.body_raw[3], v.light_code);
   text(PAD, 468, F_TINY, C_DIM, buf);
+  if (v.has_beam) snprintf(buf, sizeof buf, "BC09: %02X %02X %02X %02X", v.beam_raw[0], v.beam_raw[1], v.beam_raw[2], v.beam_raw[3]);
+  else snprintf(buf, sizeof buf, "BC09: --");
+  std::string s = buf;
+  if (v.has_switch)
+    snprintf(buf, sizeof buf, "   BC05: %02X %02X %02X %02X", v.switch_raw[0], v.switch_raw[1], v.switch_raw[2], v.switch_raw[3]);
+  else snprintf(buf, sizeof buf, "   BC05: --");
+  s += buf;
+  text_right(W - PAD, 468, F_TINY, C_DIM, s.c_str());
 }
 
 

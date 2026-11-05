@@ -14,7 +14,7 @@ if ! grep -aq "IONIQ6_FW_VERSION=$V;" "$B/ioniq6_display.ino.bin"; then
   echo "FEHLER: $B/ioniq6_display.ino.bin ist nicht Version $V - nach dem Hochzaehlen neu bauen" >&2
   exit 1
 fi
-python3 "$ESPTOOL" --chip esp32s3 merge_bin -o "$OUT/ioniq6_display_merged.bin" \
+${PYTHON:-python3} "$ESPTOOL" --chip esp32s3 merge_bin -o "$OUT/ioniq6_display_merged.bin" \
   --flash_mode keep --flash_freq keep --flash_size keep \
   0x0 "$B/ioniq6_display.ino.bootloader.bin" 0x8000 "$B/ioniq6_display.ino.partitions.bin" \
   0xe000 "$BOOT_APP0" 0x10000 "$B/ioniq6_display.ino.bin"

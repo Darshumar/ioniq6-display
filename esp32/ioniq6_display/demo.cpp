@@ -5,7 +5,7 @@
 
 namespace {
 constexpr float SPEEDUP = 8;  // simulierte Sekunden je echter Sekunde
-constexpr float REV_PER_KM = 10.65f * 1000.0f / 2.23f;
+constexpr float REV_PER_KM = 10.65f * 1000.0f / 2.25f;  // wie speed_kmh in decode.cpp
 constexpr float USABLE_KWH = 74.0f;
 
 // Geschwindigkeitsprofil Landstrasse/Autobahn in km/h
@@ -165,7 +165,7 @@ void Demo::sim(float dt, bool charging) {
 
   // Auto-Seite: alles zu, Licht an, Bremslicht beim Verzoegern
   veh.has_body = veh.has_lights = true;
-  veh.low_beam = true;
+  veh.lights_on = veh.has_beam = veh.low_beam = true;
   veh.brake_light = !charging && accel < -0.5f;
   // G-Kraft: laengs aus dem Tempoprofil, dazu sanfte Kurven
   veh.has_dyn = true;
