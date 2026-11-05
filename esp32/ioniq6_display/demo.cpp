@@ -165,7 +165,7 @@ void Demo::sim(float dt, bool charging) {
 
   // Auto-Seite: alles zu, Licht an, Bremslicht beim Verzoegern
   veh.has_body = veh.has_lights = true;
-  veh.low_beam = true;
+  veh.lights_on = veh.has_beam = veh.low_beam = true;
   veh.brake_light = !charging && accel < -0.5f;
   // G-Kraft: laengs aus dem Tempoprofil, dazu sanfte Kurven
   veh.has_dyn = true;

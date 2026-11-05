@@ -480,16 +480,27 @@ bool decode_770(const std::vector<uint8_t>& p, Vehicle& v) {
   const uint8_t* d = p.data() + 3;
   size_t n = p.size() - 3;
   switch (p[2]) {
-    case 0x03:  // Tueren (Kia EV9: bix 32 Kofferraum, 34 VL, 35 VR, 37 HR, 39 HL), Abblendlicht bix 48
+    case 0x03:  // Tueren (Kia EV9: bix 32 Kofferraum, 34 VL, 35 VR, 37 HR, 39 HL), Licht an bix 48
       if (n < 7) return false;
       v.trunk = d[4] & 0x80;
       v.door[0] = d[4] & 0x20;
       v.door[1] = d[4] & 0x10;
       v.door[3] = d[4] & 0x04;
       v.door[2] = d[4] & 0x01;
-      v.low_beam = d[6] != 0;
+      v.lights_on = d[6] != 0;
       for (int i = 0; i < 4; i++) v.body_raw[i] = 4 + i < (int)n ? d[4 + i] : 0;
       v.has_body = v.has_lights = true;
+      return true;
+    case 0x05:  // Lichtschalter (Kona EV: bix 48), Bedeutung am Ioniq 6 noch offen
+      for (int i = 0; i < 4; i++) v.switch_raw[i] = 4 + i < (int)n ? d[4 + i] : 0;
+      v.has_switch = true;
+      return true;
+    case 0x09:  // Scheinwerfer (Kona EV, IONIQ 9): bix 55 Fernlicht, bix 63 Abblendlicht
+      if (n < 8) return false;
+      v.high_beam = d[6] & 0x01;
+      v.low_beam = d[7] & 0x01;
+      for (int i = 0; i < 4; i++) v.beam_raw[i] = d[4 + i];
+      v.has_beam = true;
       return true;
     case 0x06:  // Bremslicht bix 32
       if (n < 5) return false;

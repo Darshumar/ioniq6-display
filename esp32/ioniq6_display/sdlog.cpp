@@ -49,7 +49,7 @@ const char* HEADER =
     "last_km_kwh_100km;tire_fl_bar;tire_fl_c;tire_fr_bar;tire_fr_c;tire_rl_bar;tire_rl_c;tire_rr_bar;"
     "tire_rr_c;raw_220101;raw_220105;raw_220106;raw_22C00B;raw_7E2_22E004;raw_7B3_220100;raw_744_22E002;"
     "raw_744_22E004;raw_220111;raw_7E3_22E001;raw_744_22E003;raw_7E5_22E011;raw_7E5_22E002;"
-    "ready;car_state;raw_220102;raw_220103;raw_220104;raw_22010A;raw_22010B;raw_22010C;raw_770_22BC03;raw_770_22BC06;raw_770_22BC10;raw_730_22F010\n";
+    "ready;car_state;raw_220102;raw_220103;raw_220104;raw_22010A;raw_22010B;raw_22010C;raw_770_22BC03;raw_770_22BC06;raw_770_22BC10;raw_730_22F010;raw_770_22BC09;raw_770_22BC05\n";
 
 // Wenn die Karte fast voll ist, die aeltesten Logs loeschen
 void make_room() {

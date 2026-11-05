@@ -989,6 +989,16 @@ void run_job(int j, BmsData& d, std::vector<std::string>& raw) {
       if (got && page == ui::PAGE_CAR) {
         if (query("22BC06", "778", p, 1, 1500) && decode_770(p, veh)) raw[22] = to_hex(p);
         if (query("22BC10", "778", p, 1, 1500) && decode_770(p, veh)) raw[23] = to_hex(p);
+        veh.has_switch = query("22BC05", "778", p, 1, 1500) && decode_770(p, veh);
+        if (veh.has_switch) raw[26] = to_hex(p);
+      }
+      // Scheinwerfer (Standlicht/Abblend/Fern, FW 90): bei Licht an in jedem
+      // Tuer-Takt, damit es auch im Log steht, sonst nur auf der Auto-Seite
+      if (got && (veh.lights_on || page == ui::PAGE_CAR)) {
+        veh.has_beam = query("22BC09", "778", p, 1, 1500) && decode_770(p, veh);
+        if (veh.has_beam) raw[25] = to_hex(p);
+      } else {
+        veh.has_beam = false;
       }
       break;
     }
@@ -1126,8 +1136,8 @@ void loop() {
   std::vector<uint8_t> p;
   // Rohdaten fuers Log (Reihenfolge wie im Kopf der CSV): 0-12 Steuergeraete,
   // 13 ready, 14 car_state, 15-20 Zellbloecke 220102 ... 22010C, 21-23 770 22BC03/06/10,
-  // 24 730 22F010. Sie sammeln sich bis zur naechsten Logzeile (alle LOG_MS).
-  static std::vector<std::string> raw(25);
+  // 24 730 22F010, 25-26 770 22BC09/05. Sie sammeln sich bis zur naechsten Logzeile (alle LOG_MS).
+  static std::vector<std::string> raw(27);
   static uint32_t log_ms = 0;
   target("7E4");
   uint32_t t_bms = millis();
