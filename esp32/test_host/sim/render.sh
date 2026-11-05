@@ -50,6 +50,7 @@ grid(["zellen", "g"], f"{docs}/esp32_unterseiten.png")  # versteckte Unterseiten
 grid(["page7_auto", "auto_offen"], f"{docs}/esp32_auto.png")  # Tueren und Licht
 grid(["page3_laden", "laden_ac"], f"{docs}/esp32_laden_dc_ac.png")  # Lade-Seite DC und AC  # Demo-Modus (Fahren und Laden)
 Image.open(f"{out}/warnung.ppm").save(f"{docs}/esp32_warnung.png")
+Image.open(f"{out}/akku_laden_heizen.ppm").save(f"{docs}/esp32_akku_laden_heizen.png")  # Heizen beim DC-Laden
 grid(["helligkeit", "gedimmt_40"], f"{docs}/esp32_helligkeit.png")
 # Englisch (Sprachwahl im Menue)
 grid([f"en/{p}" for p in pages], f"{docs}/esp32_seiten_en.png")

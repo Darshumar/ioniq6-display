@@ -97,6 +97,7 @@ constexpr uint32_t SETTINGS_MAGIC = 0x5E77125;
 [[noreturn]] void sleep_display();
 [[noreturn]] void power_off();
 void target(const char* tx);
+void elm_idle();
 extern std::string cur_tx;
 bool at2_active = false, at2_disabled = false;  // ATAT2, siehe at2_check
 bool menu_closed = false;  // Menue war offen: Statusbildschirm neu zeichnen
@@ -786,7 +787,7 @@ void setup() {
     delay(1500);
     ESP.restart();
   }
-  ElmBle::idle = ui::animate;  // HV-Leitungen laufen auch waehrend der Abfragen weiter
+  ElmBle::idle = elm_idle;  // HV-Leitungen laufen auch waehrend der Abfragen weiter
   touch::begin(ui::flipped());
   {
     Preferences p;
@@ -833,7 +834,8 @@ int ready_off = 0;
 // auch das Tempo). Alles andere hat einen eigenen Takt und kommt reihum dran,
 // der am laengsten ueberfaellige zuerst, bis SLOW_BUDGET_MS verbraucht sind.
 // Wer dreimal nicht antwortet, wird nur noch jede Minute gefragt.
-constexpr uint32_t SLOW_BUDGET_MS = 250;
+// FW 91: 120 statt 250 ms, meist also ein Nebenauftrag je Durchlauf (Marc 05.11.)
+constexpr uint32_t SLOW_BUDGET_MS = 120;
 constexpr uint32_t LOG_MS = 2000;  // CSV weiter alle 2 s, sonst werden die Dateien riesig
 
 enum Job { J_220105, J_220106, J_CELLS, J_ODO, J_TIRES, J_7E2, J_READY, J_CLIMA, J_7E3,
@@ -1043,13 +1045,30 @@ struct Timing {
   uint32_t cycles = 0, cycle_ms = 0, cycle_max = 0, bms_ms = 0, draw_ms = 0;
 } timing;
 
+// Zeichnen, waehrend der Adapter antwortet (FW 91): der Durchlauf setzt
+// draw_pending, gezeichnet wird in der Wartezeit der naechsten BMS-Abfrage.
+// Alles laeuft in derselben Aufgabe, der Adapter sammelt die Antwort derweil
+// im Bluetooth-Rueckruf (Kern 0).
+bool draw_pending = false, draw_in_wait = false;
+void draw_now() {
+  draw_pending = false;
+  uint32_t t0 = millis();
+  ui::dashboard(last, cons, charge, tires, cells, veh, trip_log, link_ok, page);
+  timing.draw_ms += millis() - t0;
+}
+void elm_idle() {
+  if (draw_in_wait && draw_pending) draw_now();
+  else ui::animate();
+}
+
 void loop() {
   static uint32_t next = 0;
   // Diagnose fuer Bildfehler bei Bluetooth-Verbindung (Marc 23.10.): alle 5 s
   // Flash-Zugriffe, BLE-Zustand und freien Speicher auf SD (diag_*.csv, wird
   // mit LOG_UPLOAD am Fahrtende mit hochgeladen) und an die serielle Schnittstelle.
   // Seit FW 89 dazu die Zeiten: Durchlaeufe, mittlere und laengste Dauer, Zeit
-  // fuer 220101, Abfragen/Fehler/Mittel, Kopfwechsel, Zeichnen, Adaptive Timing.
+  // fuer 220101 (seit FW 91 mit dem Zeichnen darin), Abfragen/Fehler/Mittel,
+  // Kopfwechsel, Zeichnen, Adaptive Timing.
   static uint32_t diag_ms = 0, diag_ops = 0;
   if (millis() - diag_ms >= 5000) {
     diag_ms = millis();
@@ -1083,6 +1102,7 @@ void loop() {
   // G-Seite: zwischen den Zyklen etwa fuenfmal pro Sekunde die Beschleunigung
   // holen und neu zeichnen (dort bleibt der alte 2-s-Takt, damit Luecken entstehen)
   if (millis() < next) {
+    if (draw_pending) draw_now();  // laengere Pause (G-Seite, ohne Antwort): gleich zeichnen
     handle_touch();
     ui::animate();
     static uint32_t last_g = 0;
@@ -1111,7 +1131,10 @@ void loop() {
   static uint32_t log_ms = 0;
   target("7E4");
   uint32_t t_bms = millis();
+  draw_in_wait = true;  // das Bild vom letzten Durchlauf zeichnen, waehrend das BMS antwortet
   bool ok = query("220101", "7EC", p) && decode_220101(p, d);
+  draw_in_wait = false;
+  if (draw_pending) draw_now();  // Antwort kam vor dem ersten Warteschritt
   timing.bms_ms += millis() - t_bms;
   if (ok) raw[0] = to_hex(p);
   at2_check(ok);
@@ -1166,10 +1189,10 @@ void loop() {
 
   link_ok = ok;
   ui::auto_brightness(time(nullptr));
-  uint32_t t_draw = millis();
-  if (have_data) ui::dashboard(last, cons, charge, tires, cells, veh, trip_log, link_ok, page);
+  // Gezeichnet wird erst waehrend der naechsten BMS-Abfrage (elm_idle), dann
+  // wartet der Durchlauf nicht extra auf das Bild (FW 91, ~0,14 s je Durchlauf)
+  if (have_data) draw_pending = true;
   else if (!ok) ui::status(T("Abfrage fehlgeschlagen", "Query failed"), T("wird wiederholt", "retrying"), last_answer.c_str());
-  timing.draw_ms += millis() - t_draw;
   uint32_t dur = millis() - cycle_start;
   timing.cycles++;
   timing.cycle_ms += dur;
