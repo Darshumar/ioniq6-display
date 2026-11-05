@@ -97,6 +97,8 @@ constexpr uint32_t SETTINGS_MAGIC = 0x5E77125;
 [[noreturn]] void sleep_display();
 [[noreturn]] void power_off();
 void target(const char* tx);
+extern std::string cur_tx;
+bool at2_active = false, at2_disabled = false;  // ATAT2, siehe at2_check
 bool menu_closed = false;  // Menue war offen: Statusbildschirm neu zeichnen
 
 // Touch-Test: vier Kreuze antippen, daraus Richtung und Massstab des
@@ -358,7 +360,9 @@ void handle_touch() {
   if (have_data) ui::dashboard(last, cons, charge, tires, cells, veh, trip_log, link_ok, page);
 }
 
-constexpr uint32_t INTERVAL_MS = 2000;
+// Kuerzester Abstand zwischen zwei Durchlaeufen. Bis FW 88 2000 ms (alles in
+// jedem Durchlauf), seit FW 89 nur noch eine Bremse: ein Durchlauf dauert ~0,4-0,6 s.
+constexpr uint32_t INTERVAL_MS = 300;
 std::string last_answer;  // letzte Antwort des Adapters, fuer die Fehleranzeige
 
 // Protokoll der Startschritte fuer die Anzeige: "ATZ: ELM327 v2.2"
@@ -426,6 +430,7 @@ bool car_in_use() {
   if (elm.send("0100", 4000).find("41 00") == std::string::npos) return false;
   elm.send("ATSP6", 2000);
   std::vector<uint8_t> p;
+  cur_tx.clear();  // nach der Pause lieber neu setzen
   target("730");
   if (parse_isotp(elm.send("22F010", 1500), "738", p)) return true;
   target("7E4");
@@ -634,6 +639,8 @@ Init init_elm() {
   }
   step("ATSP6", 2000);
   for (auto cmd : {"ATSH7E4", "ATFCSH7E4", "ATFCSD300000", "ATFCSM1"}) step(cmd, 2000);
+  cur_tx = "7E4";
+  if (!at2_disabled) at2_active = step("ATAT2", 2000).find("OK") != std::string::npos;
   return Init::Ok;
 }
 
@@ -658,21 +665,55 @@ const char* thermal_name(const BmsData& d) {
   }
 }
 
+// Zeiten und Zaehler fuers Diagnose-Log (FW 89)
+struct QueryStats {
+  uint32_t n = 0, fail = 0, ms = 0, headers = 0;
+} q_stats;
+
+// Eingestelltes Steuergeraet: die Kopfzeile nur bei einem Wechsel senden
+// (je Wechsel zwei Befehle, ATSH und ATFCSH). Leer = unbekannt.
+std::string cur_tx;
+
 void target(const char* tx) {
+  if (cur_tx == tx) return;
   char cmd[16];
   snprintf(cmd, sizeof cmd, "ATSH%s", tx);
   elm.send(cmd, 2000);
   snprintf(cmd, sizeof cmd, "ATFCSH%s", tx);
   elm.send(cmd, 2000);
+  cur_tx = tx;
+  q_stats.headers++;
+}
+
+// Adaptive Timing 2 (kuerzere Wartezeit des Adapters nach der Antwort, FW 89).
+// Antwortet das BMS damit zweimal in Folge nicht, zurueck auf den Standard ATAT1
+// und bis zum Neustart dabei bleiben.
+int at2_fails = 0;
+void at2_check(bool ok) {
+  if (!at2_active) return;
+  if (ok) {
+    at2_fails = 0;
+    return;
+  }
+  if (++at2_fails >= 2) {
+    elm.send("ATAT1", 1000);
+    at2_active = false;
+    at2_disabled = true;
+    Serial.println("ATAT2 aus, zurueck auf ATAT1");
+  }
 }
 
 // Abfrage mit einer Wiederholung; liefert die zusammengesetzte Nutzlast
 bool query(const char* cmd, const char* rx, std::vector<uint8_t>& out, int tries = 2,
            uint32_t timeout_ms = 8000) {
   for (int i = 0; i < tries; i++) {
+    uint32_t t0 = millis();
     std::string a = elm.send(cmd, timeout_ms);
+    q_stats.n++;
+    q_stats.ms += millis() - t0;
     handle_touch();
     if (parse_isotp(a, rx, out)) return true;
+    q_stats.fail++;
     last_answer = std::string(cmd) + ": " + (a.empty() ? T("keine Antwort", "no answer") : a);
     Serial.printf("> %s fehlgeschlagen\n%s\n", cmd, a.c_str());
   }
@@ -782,155 +823,265 @@ void setup() {
 }
 
 // Ready war in dieser Fahrt an; wie oft es seitdem in Folge aus war
+// Ready war in dieser Fahrt an; wie oft es seitdem in Folge aus war
 bool ready_seen = false;
 int ready_off = 0;
 
-// Weitere Steuergeraete (Zuordnung aus OBDb Hyundai-IONIQ-6). Wer dreimal
-// nicht antwortet, wird nur noch selten gefragt, damit der Zyklus schnell bleibt.
-void poll_more(const BmsData& d, std::vector<std::string>& raw) {
-  static int cycle = 0, miss[9] = {};
-  static bool was_charging = false;
-  cycle++;
+// Abfrageplan (FW 89, Marc 04.11.: Werte schneller anzeigen). Bis FW 88 fragte
+// jeder Durchlauf alles ab und dauerte 2,0-2,2 s (jeder 5. 3,3 s). Jetzt holt
+// jeder Durchlauf nur das BMS 220101 (Leistung, Strom, SoC, Drehzahl, daraus
+// auch das Tempo). Alles andere hat einen eigenen Takt und kommt reihum dran,
+// der am laengsten ueberfaellige zuerst, bis SLOW_BUDGET_MS verbraucht sind.
+// Wer dreimal nicht antwortet, wird nur noch jede Minute gefragt.
+constexpr uint32_t SLOW_BUDGET_MS = 250;
+constexpr uint32_t LOG_MS = 2000;  // CSV weiter alle 2 s, sonst werden die Dateien riesig
+
+enum Job { J_220105, J_220106, J_CELLS, J_ODO, J_TIRES, J_7E2, J_READY, J_CLIMA, J_7E3,
+           J_CHARGE, J_AUX, J_OBC, J_BODY, J_DYN, J_STATS, J_COUNT };
+// Steuergeraet je Auftrag (fuer den Vorzug ohne Kopfwechsel)
+const char* const JOB_TX[J_COUNT] = {"7E4", "7E4", "7E4", "7C6", "7A0", "7E2", "744", "7B3", "7E3",
+                                     "744", "7E5", "7E5", "770", "730", "7E4"};
+uint32_t job_last[J_COUNT] = {};
+int job_miss[J_COUNT] = {};
+bool was_charging = false;
+
+bool is_charging(const BmsData& d) { return charge.active || (d.bms_status & 0x80); }
+
+// Takt eines Auftrags in ms, 0 = jetzt nicht noetig
+uint32_t job_period(int j, const BmsData& d) {
+  bool charging = is_charging(d);
+  bool moving = speed_kmh(d, veh) > 5;
+  uint32_t ms = 0;
+  switch (j) {
+    case J_220105: ms = 3000; break;   // Anzeige-SoC, Restenergie, Module 6-16
+    case J_220106: ms = 5000; break;   // Kuehlmittel, Pumpe
+    case J_CELLS: ms = page == ui::PAGE_CELLS ? 1 : 3000; break;  // ein Block je Auftrag
+    case J_ODO: ms = 5000; break;      // km-Stand fuer den Verbrauch
+    case J_TIRES: ms = page == ui::PAGE_DRIVETRAIN ? 2000 : 10000; break;
+    case J_7E2: ms = 2000; break;      // Fahrpedal; das Tempo kommt dazwischen aus der Drehzahl
+    // Ready (Hauptrelais): bei Ready und danach oft, sonst selten (744 schweigt dann, kostet 1 s)
+    case J_READY: ms = (veh.relay || ready_seen) ? 1500 : 6000; break;
+    case J_CLIMA: ms = 10000; break;
+    case J_7E3: ms = page == ui::PAGE_TEMPS ? 1500 : 10000; break;
+    case J_CHARGE: ms = (charging || page == ui::PAGE_CHARGE) ? 2000 : 0; break;
+    case J_AUX: ms = 10000; break;
+    case J_OBC: ms = (charging && !(veh.has_charge ? veh.dc : charge.dc())) ? 2000 : 0; break;
+    // Tueren: im Stand oft (Sprung zur Auto-Seite), beim Fahren selten
+    case J_BODY: ms = page == ui::PAGE_CAR ? 1000 : moving ? 5000 : 1500; break;
+    // ESC: zeigt Ready (FW 84) und liefert die G-Spitzen; auf der G-Seite fragt loop() dazwischen
+    case J_DYN: ms = 2000; break;
+    case J_STATS: ms = (!veh.has_stats || (was_charging && !charging)) ? 1 : 0; break;
+  }
+  if (ms && job_miss[j] >= 3 && j != J_READY && j != J_CELLS) ms = 60000;
+  // Relais an: die ESC entscheidet, ob wirklich Ready ist (FW 84), also oefter nachsehen
+  if (j == J_DYN && veh.relay && job_miss[j] >= 3) ms = 5000;
+  return ms;
+}
+
+void job_note(int j, bool got) { job_miss[j] = got ? 0 : job_miss[j] + 1; }
+
+void run_job(int j, BmsData& d, std::vector<std::string>& raw) {
   std::vector<uint8_t> p;
-  auto due = [&](int i, int every) { return miss[i] < 3 ? cycle % every == 0 : cycle % 60 == 0; };
-  auto note = [&](int i, bool got) { miss[i] = got ? 0 : miss[i] + 1; };
-  // Tempo und Fahrpedal vom Fahrzeugrechner, jeden Zyklus
-  if (due(0, 1)) {
-    target("7E2");
-    bool got = query("22E004", "7EA", p, 1, 1500) && decode_7E2_E004(p, veh);
-    if (got) raw[4] = to_hex(p);
-    if (!got) veh.has_speed = false;  // dann wieder aus der Motordrehzahl
-    veh.ecu_7e2 = got;
-    note(0, got);
-  }
-  // Ready (Hauptrelais, 744 22E004). Bei Ready und kurz danach jeden Zyklus,
-  // sonst jeden dritten: 744 schweigt dann und jede Abfrage kostet 1 s.
-  if (veh.relay || ready_seen || cycle % 3 == 0) {
-    target("744");
-    bool got = query("22E004", "74C", p, 1, 1000) && decode_744(p, veh);
-    if (got) raw[7] = to_hex(p);
-    else veh.relay = false;
-    veh.has_relay = true;
-    if (veh.relay) ready_off = 0;
-    else if (ready_seen) ready_off++;
-  }
-  // Klima: Aussen- und Innentemperatur, alle 10 s
-  if (due(1, 5)) {
-    target("7B3");
-    bool got = query("220100", "7BB", p, 1, 1500) && decode_7B3_0100(p, veh);
-    if (got) raw[5] = to_hex(p);
-    note(1, got);
-  }
-  // Heckmotor und Inverter: Temperaturen, alle 10 s (auf der Temperatur-Seite jeden Zyklus)
-  if (due(4, page == ui::PAGE_TEMPS ? 1 : 5)) {
-    target("7E3");
-    bool got = query("22E001", "7EB", p, 1, 1500) && decode_7E3_E001(p, veh);
-    if (got) raw[9] = to_hex(p);
-    note(4, got);
-  }
-  // Ladesteuerung nur beim Laden oder auf der Lade-Seite
-  bool charging = charge.active || (d.bms_status & 0x80);
-  if ((charging || page == ui::PAGE_CHARGE) && due(2, 1)) {
-    target("744");
-    bool got = false;
-    for (const char* did : {"22E001", "22E002", "22E003"}) {  // E004 oben bei Ready
-      bool one = query(did, "74C", p, 1, 1500) && decode_744(p, veh);
-      if (one && did[5] == '2') raw[6] = to_hex(p);
-      if (one && did[5] == '3') raw[10] = to_hex(p);
-      got |= one;
+  bool got = false;
+  switch (j) {
+    case J_220105:
+      target("7E4");
+      got = query("220105", "7EC", p) && decode_220105(p, d);
+      if (got) raw[1] = to_hex(p);
+      break;
+    case J_220106:
+      target("7E4");
+      got = query("220106", "7EC", p, 1, 2000) && decode_220106(p, d);
+      if (got) raw[2] = to_hex(p);
+      break;
+    case J_CELLS: {
+      // Zellspannungen: ein Block je Auftrag, Bloecke ohne Antwort ueberspringen
+      static int cell_block = 0, cell_miss[6] = {};
+      for (int k = 0; k < 6; k++) {
+        int b = cell_block++ % 6;
+        if (cell_miss[b] >= 3) continue;
+        target("7E4");
+        got = query(CELL_DIDS[b], "7EC", p, 1, 2000) && decode_cells(p, b, cells);
+        if (got) raw[15 + b] = to_hex(p);
+        cell_miss[b] = got ? 0 : cell_miss[b] + 1;
+        break;
+      }
+      got = true;  // eigener Zaehler je Block
+      break;
     }
-    note(2, got);
-  } else if (!charging) {
-    veh.has_charge = false;
-  }
-  // 12-V-Batterie und Wandler (ICCU), alle 10 s
-  if (due(5, 5)) {
-    target("7E5");
-    bool got = query("22E011", "7ED", p, 1, 1500) && decode_7E5(p, veh);
-    if (got) raw[11] = to_hex(p);
-    if (!got) veh.has_aux = false;
-    note(5, got);
-  }
-  // Bordlader nur beim AC-Laden, jeden Zyklus
-  if (charging && !(veh.has_charge ? veh.dc : charge.dc()) && due(6, 1)) {
-    target("7E5");
-    bool got = query("22E002", "7ED", p, 1, 1500) && decode_7E5(p, veh);
-    if (got) raw[12] = to_hex(p);
-    note(6, got);
-  } else if (!charging) {
-    veh.has_obc = false;
-  }
-  // Karosserie (770): Tueren, Kofferraum, Licht, jeden Zyklus (fuer den
-  // Seitenwechsel); Brems- und Lichtcode nur auf der Auto-Seite
-  if (due(7, 1)) {
-    target("770");
-    bool got = query("22BC03", "778", p, 1, 1500) && decode_770(p, veh);
-    if (got) raw[21] = to_hex(p);
-    if (!got) veh.has_body = veh.has_lights = false;
-    // Geht eine Tuer oder Klappe auf, zur Auto-Seite springen und, wenn alles
-    // wieder zu ist, zurueck. Wer solange selbst wegblaettert, bleibt dort.
-    static int auto_from = -1;
-    static bool dismissed = false;
-    bool open = got && (veh.door[0] || veh.door[1] || veh.door[2] || veh.door[3] || veh.trunk || veh.hood);
-    if (auto_from >= 0 && page != ui::PAGE_CAR) auto_from = -1, dismissed = true;
-    if (open && page != ui::PAGE_CAR && auto_from < 0 && !dismissed) {
-      auto_from = page;
-      page = ui::PAGE_CAR;
-    } else if (!open) {
-      if (auto_from >= 0 && page == ui::PAGE_CAR) page = auto_from;
-      auto_from = -1;
-      dismissed = false;
+    case J_ODO:
+      target("7C6");
+      got = query("22B002", "7CE", p, 1, 2000) && decode_22B002(p, d);
+      break;
+    case J_TIRES:
+      target("7A0");
+      got = query("22C00B", "7A8", p, 1, 2000) && decode_22C00B(p, tires);
+      if (got) raw[3] = to_hex(p);
+      break;
+    case J_7E2:
+      target("7E2");
+      got = query("22E004", "7EA", p, 1, 1500) && decode_7E2_E004(p, veh);
+      if (got) raw[4] = to_hex(p);
+      if (!got) veh.has_speed = false;
+      veh.ecu_7e2 = got;
+      break;
+    case J_READY:
+      target("744");
+      got = query("22E004", "74C", p, 1, 1000) && decode_744(p, veh);
+      if (got) raw[7] = to_hex(p);
+      else veh.relay = false;
+      veh.has_relay = true;
+      if (veh.relay) ready_off = 0;
+      else if (ready_seen) ready_off++;
+      got = true;  // Schweigen heisst hier "aus", nicht "kann es nicht"
+      break;
+    case J_CLIMA:
+      target("7B3");
+      got = query("220100", "7BB", p, 1, 1500) && decode_7B3_0100(p, veh);
+      if (got) raw[5] = to_hex(p);
+      break;
+    case J_7E3:
+      target("7E3");
+      got = query("22E001", "7EB", p, 1, 1500) && decode_7E3_E001(p, veh);
+      if (got) raw[9] = to_hex(p);
+      break;
+    case J_CHARGE:
+      target("744");
+      for (const char* did : {"22E001", "22E002", "22E003"}) {  // E004 bei J_READY
+        bool one = query(did, "74C", p, 1, 1500) && decode_744(p, veh);
+        if (one && did[5] == '2') raw[6] = to_hex(p);
+        if (one && did[5] == '3') raw[10] = to_hex(p);
+        got |= one;
+      }
+      break;
+    case J_AUX:
+      target("7E5");
+      got = query("22E011", "7ED", p, 1, 1500) && decode_7E5(p, veh);
+      if (got) raw[11] = to_hex(p);
+      if (!got) veh.has_aux = false;
+      break;
+    case J_OBC:
+      target("7E5");
+      got = query("22E002", "7ED", p, 1, 1500) && decode_7E5(p, veh);
+      if (got) raw[12] = to_hex(p);
+      break;
+    case J_BODY: {
+      target("770");
+      got = query("22BC03", "778", p, 1, 1500) && decode_770(p, veh);
+      if (got) raw[21] = to_hex(p);
+      if (!got) veh.has_body = veh.has_lights = false;
+      // Geht eine Tuer oder Klappe auf, zur Auto-Seite springen und, wenn alles
+      // wieder zu ist, zurueck. Wer solange selbst wegblaettert, bleibt dort.
+      static int auto_from = -1;
+      static bool dismissed = false;
+      bool open = got && (veh.door[0] || veh.door[1] || veh.door[2] || veh.door[3] || veh.trunk || veh.hood);
+      if (auto_from >= 0 && page != ui::PAGE_CAR) auto_from = -1, dismissed = true;
+      if (open && page != ui::PAGE_CAR && auto_from < 0 && !dismissed) {
+        auto_from = page;
+        page = ui::PAGE_CAR;
+      } else if (!open) {
+        if (auto_from >= 0 && page == ui::PAGE_CAR) page = auto_from;
+        auto_from = -1;
+        dismissed = false;
+      }
+      if (got && page == ui::PAGE_CAR) {
+        if (query("22BC06", "778", p, 1, 1500) && decode_770(p, veh)) raw[22] = to_hex(p);
+        if (query("22BC10", "778", p, 1, 1500) && decode_770(p, veh)) raw[23] = to_hex(p);
+        veh.has_switch = query("22BC05", "778", p, 1, 1500) && decode_770(p, veh);
+        if (veh.has_switch) raw[26] = to_hex(p);
+      }
+      // Scheinwerfer (Standlicht/Abblend/Fern, FW 90): bei Licht an in jedem
+      // Tuer-Takt, damit es auch im Log steht, sonst nur auf der Auto-Seite
+      if (got && (veh.lights_on || page == ui::PAGE_CAR)) {
+        veh.has_beam = query("22BC09", "778", p, 1, 1500) && decode_770(p, veh);
+        if (veh.has_beam) raw[25] = to_hex(p);
+      } else {
+        veh.has_beam = false;
+      }
+      break;
     }
-    if (got && page == ui::PAGE_CAR) {
-      if (query("22BC06", "778", p, 1, 1500) && decode_770(p, veh)) raw[22] = to_hex(p);
-      if (query("22BC10", "778", p, 1, 1500) && decode_770(p, veh)) raw[23] = to_hex(p);
+    case J_DYN:
+      target("730");
+      got = query("22F010", "738", p, 1, 1500) && decode_730_F010(p, veh);
+      if (got) raw[24] = to_hex(p), veh.add_dyn_sample();
+      else veh.has_dyn = false;
+      break;
+    case J_STATS:
+      target("7E4");
+      got = query("220111", "7EC", p, 1, 1500) && decode_220111(p, veh);
+      if (got) raw[8] = to_hex(p);
+      break;
+  }
+  job_note(j, got);
+  job_last[j] = millis();
+}
+
+// Die faelligen Auftraege, der am laengsten ueberfaellige zuerst, bis das
+// Zeitbudget verbraucht ist (mindestens einer). all = alles Faellige (erster Durchlauf).
+void run_jobs(BmsData& d, std::vector<std::string>& raw, bool all) {
+  uint32_t t0 = millis();
+  bool done[J_COUNT] = {};
+  for (;;) {
+    int best = -1;
+    float urg = 0;
+    uint32_t now = millis();
+    for (int j = 0; j < J_COUNT; j++) {
+      uint32_t per = job_period(j, d);
+      if (done[j] || !per) continue;
+      float u = job_last[j] ? (float)(now - job_last[j]) / per : 1000.0f;
+      if (u < 1.0f) continue;  // noch nicht faellig
+      // Gleiches Steuergeraet wie gerade eingestellt: kein Kopfwechsel, kleiner Vorzug
+      if (cur_tx == JOB_TX[j]) u *= 1.25f;
+      if (best < 0 || u > urg) best = j, urg = u;
     }
-    note(7, got);
+    if (best < 0) break;
+    run_job(best, d, raw);
+    done[best] = true;
+    handle_touch();
+    if (!all && millis() - t0 >= SLOW_BUDGET_MS) break;
   }
-  // Fahrdynamik (ESC 730): G-Kraft, jeden Zyklus fuer die Spitzen der Fahrt;
-  // auf der G-Seite fragt loop() dazwischen noch schneller ab. Bei Relais an
-  // auch nach Aussetzern alle 5 Zyklen: sie zeigt, ob wirklich Ready ist.
-  if (due(8, 1) || (veh.relay && cycle % 5 == 0)) {
-    target("730");
-    bool got = query("22F010", "738", p, 1, 1500) && decode_730_F010(p, veh);
-    if (got) raw[24] = to_hex(p), veh.add_dyn_sample();
-    else veh.has_dyn = false;
-    note(8, got);
-  }
+  bool charging = is_charging(d);
+  if (!charging) veh.has_charge = false, veh.has_obc = false;
   // Ready = Relais an und die ESC antwortet (oder ein Motor dreht). Relais
   // allein heisst auch 12-V-Nachladen nach dem Abstellen.
   if (veh.relay && (veh.has_dyn || d.rpm_front != 0 || d.rpm_rear != 0)) ready_seen = true;
-  // Ladestatistik: nach dem Verbinden und nach jeder Ladung einmal
-  if ((!veh.has_stats || (was_charging && !charging)) && due(3, 1)) {
-    target("7E4");
-    bool got = query("220111", "7EC", p, 1, 1500) && decode_220111(p, veh);
-    if (got) raw[8] = to_hex(p);
-    note(3, got);
-  }
   was_charging = charging;
 }
+
+// Messwerte fuers Diagnose-Log (je 5 s): Durchlaeufe, Abfragen, Zeichnen
+struct Timing {
+  uint32_t cycles = 0, cycle_ms = 0, cycle_max = 0, bms_ms = 0, draw_ms = 0;
+} timing;
 
 void loop() {
   static uint32_t next = 0;
   // Diagnose fuer Bildfehler bei Bluetooth-Verbindung (Marc 23.10.): alle 5 s
   // Flash-Zugriffe, BLE-Zustand und freien Speicher auf SD (diag_*.csv, wird
-  // mit LOG_UPLOAD am Fahrtende mit hochgeladen) und an die serielle Schnittstelle
+  // mit LOG_UPLOAD am Fahrtende mit hochgeladen) und an die serielle Schnittstelle.
+  // Seit FW 89 dazu die Zeiten: Durchlaeufe, mittlere und laengste Dauer, Zeit
+  // fuer 220101, Abfragen/Fehler/Mittel, Kopfwechsel, Zeichnen, Adaptive Timing.
   static uint32_t diag_ms = 0, diag_ops = 0;
   if (millis() - diag_ms >= 5000) {
     diag_ms = millis();
-    char line[128], ts[12] = "";
+    char line[200], ts[12] = "";
     time_t now = time(nullptr);
     if (now > 1700000000) {
       struct tm tm;
       localtime_r(&now, &tm);
       strftime(ts, sizeof ts, "%H:%M:%S", &tm);
     }
-    snprintf(line, sizeof line, "%s;%lu;%u;%d;%u;%u;%u\n", ts, (unsigned long)(millis() / 1000),
-             (unsigned)(s_flash_ops - diag_ops), elm.connected() ? 1 : 0,
+    uint32_t c = timing.cycles ? timing.cycles : 1;
+    snprintf(line, sizeof line, "%s;%lu;%u;%d;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%u;%d\n", ts,
+             (unsigned long)(millis() / 1000), (unsigned)(s_flash_ops - diag_ops), elm.connected() ? 1 : 0,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)timing.cycles,
+             (unsigned)(timing.cycle_ms / c), (unsigned)timing.cycle_max, (unsigned)(timing.bms_ms / c),
+             (unsigned)q_stats.n, (unsigned)q_stats.fail, (unsigned)(q_stats.n ? q_stats.ms / q_stats.n : 0),
+             (unsigned)q_stats.headers, (unsigned)(timing.draw_ms / c), at2_active ? 2 : 1);
     diag_ops = s_flash_ops;
+    timing = Timing();
+    q_stats = QueryStats();
     Serial.print("DIAG ");
     Serial.print(line);
     sdlog::diag(line);
@@ -940,15 +1091,14 @@ void loop() {
     connect();
   }
   // G-Seite: zwischen den Zyklen etwa fuenfmal pro Sekunde die Beschleunigung
-  // holen und neu zeichnen (Kopf bleibt dabei auf 730, vor dem Zyklus zurueck)
-  static bool on_730 = false;
+  // holen und neu zeichnen (dort bleibt der alte 2-s-Takt, damit Luecken entstehen)
   if (millis() < next) {
     handle_touch();
     ui::animate();
     static uint32_t last_g = 0;
     if (page == ui::PAGE_G && have_data && veh.has_dyn && next - millis() > 400 && millis() - last_g >= 200) {
       last_g = millis();
-      if (!on_730) target("730"), on_730 = true;
+      target("730");
       std::vector<uint8_t> p;
       if (query("22F010", "738", p, 1, 500) && decode_730_F010(p, veh)) {
         veh.add_dyn_sample();
@@ -958,52 +1108,32 @@ void loop() {
     delay(10);
     return;
   }
-  if (on_730) target("7E4"), on_730 = false;
-  next = millis() + INTERVAL_MS;
+  uint32_t cycle_start = millis();
+  next = cycle_start + (page == ui::PAGE_G ? 2000 : INTERVAL_MS);
 
-  BmsData d;
+  // Werte, die in diesem Durchlauf nicht dran sind, bleiben vom letzten stehen
+  BmsData d = have_data ? last : BmsData();
   std::vector<uint8_t> p;
   // Rohdaten fuers Log (Reihenfolge wie im Kopf der CSV): 0-12 Steuergeraete,
   // 13 ready, 14 car_state, 15-20 Zellbloecke 220102 ... 22010C, 21-23 770 22BC03/06/10,
-  // 24 730 22F010
-  std::vector<std::string> raw(25);
+  // 24 730 22F010, 25-26 770 22BC09/05. Sie sammeln sich bis zur naechsten Logzeile (alle LOG_MS).
+  static std::vector<std::string> raw(27);
+  static uint32_t log_ms = 0;
+  target("7E4");
+  uint32_t t_bms = millis();
   bool ok = query("220101", "7EC", p) && decode_220101(p, d);
+  timing.bms_ms += millis() - t_bms;
   if (ok) raw[0] = to_hex(p);
-  ok = ok && query("220105", "7EC", p) && decode_220105(p, d);
-  if (ok) raw[1] = to_hex(p);
-  if (ok && query("220106", "7EC", p) && decode_220106(p, d)) raw[2] = to_hex(p);
+  at2_check(ok);
   if (ok) {
-    target("7C6");
-    if (query("22B002", "7CE", p)) decode_22B002(p, d);
-    // Reifen aendern sich langsam: alle 10 s, auf der Antrieb-Seite jedes Mal
-    static int cycle = 0;
-    if (page == ui::PAGE_DRIVETRAIN || cycle++ % 5 == 0) {
-      target("7A0");
-      // kurz: nicht die Akkuwerte aufhalten
-      if (query("22C00B", "7A8", p, 1, 2000) && decode_22C00B(p, tires)) raw[3] = to_hex(p);
-    }
-    target("7E4");
-    // Zellspannungen: auf der Zellen-Seite alle Bloecke, sonst einer pro Zyklus
-    // (Bloecke, die dreimal nicht antworten, werden uebersprungen)
-    static int cell_block = 0, cell_miss[6] = {};
-    int n_blocks = page == ui::PAGE_CELLS ? 6 : 1;
-    for (int i = 0; i < n_blocks; i++) {
-      int b = cell_block++ % 6;
-      if (cell_miss[b] >= 3) continue;
-      bool got = query(CELL_DIDS[b], "7EC", p, 1, 2000) && decode_cells(p, b, cells);
-      if (got) raw[15 + b] = to_hex(p);
-      cell_miss[b] = got ? 0 : cell_miss[b] + 1;
-      handle_touch();
-    }
-    poll_more(d, raw);
-    target("7E4");
+    bool first = !have_data;
+    // Erster Durchlauf: alles einmal holen, damit jede Seite gleich gefuellt ist
+    run_jobs(d, raw, first);
+  }
+  if (ok) {
     cons.update(millis() / 1000.0, d.power_kw, d.odometer_km, d.rpm_rear != 0 || d.rpm_front != 0);
     // Beim Einstecken des Ladekabels direkt auf die Lade-Seite wechseln
     if (charge.update(millis() / 1000.0, d)) page = ui::PAGE_CHARGE;
-    if (veh.has_relay) {
-      raw[13] = veh.relay ? "1" : "0";
-      raw[14] = std::to_string(car_state(veh, charge.active || (d.bms_status & 0x80)));
-    }
     last = d;
     if (!have_data && !trip_start_ms) {  // Fahrtbeginn
       trip_start_ms = millis();
@@ -1012,7 +1142,15 @@ void loop() {
       trip.soc_from = (uint8_t)d.soc_display;
     }
     have_data = true;
-    sdlog::write(d, cons, tires, thermal_name(d), raw);
+    if (millis() - log_ms >= LOG_MS) {
+      log_ms = millis();
+      if (veh.has_relay) {
+        raw[13] = veh.relay ? "1" : "0";
+        raw[14] = std::to_string(car_state(veh, is_charging(d)));
+      }
+      sdlog::write(d, cons, tires, thermal_name(d), raw);
+      for (auto& r : raw) r.clear();
+    }
   }
   // Fahrtende: Ready (Hauptrelais) war an und ist dreimal in Folge aus. Das
   // kommt Sekunden nach dem Ausschalten, das BMS antwortet danach noch ~20 s
@@ -1026,6 +1164,8 @@ void loop() {
   // Sonst (Ready nie gesehen, z. B. nur Zuendung): das BMS antwortet nicht
   // mehr. Die 12 V allein reichen nicht (pendeln beim Fahren unter CAR_ON_V),
   // sie verkuerzen nur das Warten.
+  // Ohne Antwort weiter im alten 2-s-Takt, damit die Grenzen unten gleich lang bleiben
+  if (!ok) next = cycle_start + 2000;
   static int fails = 0;
   fails = ok ? 0 : fails + 1;
   if (fails >= 5) {
@@ -1036,6 +1176,12 @@ void loop() {
 
   link_ok = ok;
   ui::auto_brightness(time(nullptr));
+  uint32_t t_draw = millis();
   if (have_data) ui::dashboard(last, cons, charge, tires, cells, veh, trip_log, link_ok, page);
   else if (!ok) ui::status(T("Abfrage fehlgeschlagen", "Query failed"), T("wird wiederholt", "retrying"), last_answer.c_str());
+  timing.draw_ms += millis() - t_draw;
+  uint32_t dur = millis() - cycle_start;
+  timing.cycles++;
+  timing.cycle_ms += dur;
+  if (dur > timing.cycle_max) timing.cycle_max = dur;
 }

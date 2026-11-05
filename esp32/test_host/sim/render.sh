@@ -48,6 +48,7 @@ Image.open(f"{out}/g.ppm").save(f"{docs}/esp32_g.png")  # Unterseite von Antrieb
 Image.open(f"{out}/zellen.ppm").save(f"{docs}/esp32_zellen.png")  # Unterseite von Akku
 grid(["zellen", "g"], f"{docs}/esp32_unterseiten.png")  # versteckte Unterseiten
 grid(["page7_auto", "auto_offen"], f"{docs}/esp32_auto.png")  # Tueren und Licht
+grid(["auto_standlicht", "page7_auto", "auto_fernlicht", "auto_offen"], f"{docs}/esp32_auto_licht.png")  # Stand-, Abblend-, Fernlicht
 grid(["page3_laden", "laden_ac"], f"{docs}/esp32_laden_dc_ac.png")  # Lade-Seite DC und AC  # Demo-Modus (Fahren und Laden)
 Image.open(f"{out}/warnung.ppm").save(f"{docs}/esp32_warnung.png")
 Image.open(f"{out}/akku_laden_heizen.ppm").save(f"{docs}/esp32_akku_laden_heizen.png")  # Heizen beim DC-Laden

@@ -67,14 +67,20 @@ struct Vehicle {
   int obc_c[2] = {0, 0};
   bool has_stats = false;
   uint32_t ac_count = 0, dc_count = 0, ac_kwh = 0, dc_kwh = 0;
-  // 770 Karosserie (IGPM): 22BC03 Tueren/Kofferraum/Abblendlicht, 22BC06 Bremslicht,
-  // 22BC10 Lichtcode. Tuerbits aus OBDb Kia-EV9, am Ioniq 6 noch unbestaetigt;
-  // Abblendlicht/Bremslicht/Lichtcode aus OBDb Hyundai-IONIQ-6.
+  // 770 Karosserie (IGPM): 22BC03 Tueren/Kofferraum/Licht, 22BC06 Bremslicht,
+  // 22BC09 Scheinwerfer, 22BC10 Lichtcode. Tuerbits aus OBDb Kia-EV9 (am Auto
+  // bestaetigt). BC03 d[6] (OBDb "Low beams") ist am Ioniq 6 bei Standlicht und
+  // Abblendlicht gesetzt (Marc 04.11.) = Licht an. BC09 aus OBDb Kona EV/IONIQ 9:
+  // d[6] Bit 0 Fernlicht, d[7] Bit 0 Abblendlicht, am Ioniq 6 unbestaetigt.
   bool has_body = false;
   bool door[4] = {false, false, false, false};  // vorne links, vorne rechts, hinten links, hinten rechts
   bool trunk = false, hood = false;             // Motorhaube (Frunk): Bit noch unbekannt
-  bool has_lights = false, low_beam = false, brake_light = false;
+  bool has_lights = false, lights_on = false, brake_light = false;
+  bool has_beam = false, low_beam = false, high_beam = false;  // 22BC09
   int light_code = -1;  // 22BC10, Bedeutung noch unbekannt
+  uint8_t beam_raw[4] = {0, 0, 0, 0};    // 22BC09 Nutzbytes 4..7
+  uint8_t switch_raw[4] = {0, 0, 0, 0};  // 22BC05 (Lichtschalter?) Nutzbytes 4..7
+  bool has_switch = false;
   uint8_t body_raw[4] = {0, 0, 0, 0};  // 22BC03 Nutzbytes 4..7 zum Bestaetigen am Auto
   // 730 22F010 Fahrdynamik (ESC), Skala und Achsen aus Marcs Fahrt 27.10.
   // Beschleunigung in g; lon > 0 = beschleunigen, lat > 0 = Linkskurve
@@ -103,7 +109,7 @@ bool decode_744(const std::vector<uint8_t>& p, Vehicle& v);  // E001-E004
 bool decode_220111(const std::vector<uint8_t>& p, Vehicle& v);
 bool decode_7E5(const std::vector<uint8_t>& p, Vehicle& v);  // 22E011 und 22E002
 bool decode_7E3_E001(const std::vector<uint8_t>& p, Vehicle& v);
-bool decode_770(const std::vector<uint8_t>& p, Vehicle& v);  // 22BC03, 22BC06, 22BC10
+bool decode_770(const std::vector<uint8_t>& p, Vehicle& v);  // 22BC03, 05, 06, 09, 10
 bool decode_730_F010(const std::vector<uint8_t>& p, Vehicle& v);
 float speed_kmh(const BmsData& d, const Vehicle& v);  // vom Auto, sonst aus der Drehzahl
 
