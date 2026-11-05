@@ -495,11 +495,10 @@ bool decode_770(const std::vector<uint8_t>& p, Vehicle& v) {
       for (int i = 0; i < 4; i++) v.switch_raw[i] = 4 + i < (int)n ? d[4 + i] : 0;
       v.has_switch = true;
       return true;
-    case 0x09:  // Scheinwerfer (Kona EV, IONIQ 9): bix 55 Fernlicht, bix 63 Abblendlicht
-      if (n < 8) return false;
-      v.high_beam = d[6] & 0x01;
-      v.low_beam = d[7] & 0x01;
-      for (int i = 0; i < 4; i++) v.beam_raw[i] = d[4 + i];
+    case 0x09:  // Leuchten; am Ioniq 6 nicht wie beim Kona (siehe decode.h)
+      if (n < 12) return false;
+      v.drl = d[11] & 0x30;
+      for (int i = 0; i < 4; i++) v.beam_raw[i] = d[8 + i];
       v.has_beam = true;
       return true;
     case 0x06:  // Bremslicht bix 32

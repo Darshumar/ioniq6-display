@@ -70,15 +70,17 @@ struct Vehicle {
   // 770 Karosserie (IGPM): 22BC03 Tueren/Kofferraum/Licht, 22BC06 Bremslicht,
   // 22BC09 Scheinwerfer, 22BC10 Lichtcode. Tuerbits aus OBDb Kia-EV9 (am Auto
   // bestaetigt). BC03 d[6] (OBDb "Low beams") ist am Ioniq 6 bei Standlicht und
-  // Abblendlicht gesetzt (Marc 04.11.) = Licht an. BC09 aus OBDb Kona EV/IONIQ 9:
-  // d[6] Bit 0 Fernlicht, d[7] Bit 0 Abblendlicht, am Ioniq 6 unbestaetigt.
+  // Abblendlicht gesetzt (Marc 04.11.) = Licht an. BC09 am Ioniq 6 (Log 05.11.):
+  // 30 00 03 CC 00 00 C0 00 bei Licht an, ... 00 30 bei Licht aus (d[11] 0x30 =
+  // Tagfahrlicht, vermutet). Die Kona-Bits (d[6] Bit 0 Fernlicht) passen nicht:
+  // d[6] ist immer 03, FW 90 zeigte deshalb dauernd Fernlicht.
   bool has_body = false;
   bool door[4] = {false, false, false, false};  // vorne links, vorne rechts, hinten links, hinten rechts
   bool trunk = false, hood = false;             // Motorhaube (Frunk): Bit noch unbekannt
   bool has_lights = false, lights_on = false, brake_light = false;
-  bool has_beam = false, low_beam = false, high_beam = false;  // 22BC09
+  bool has_beam = false, drl = false;  // 22BC09: Tagfahrlicht (FW 94, Log 05.11.)
   int light_code = -1;  // 22BC10, Bedeutung noch unbekannt
-  uint8_t beam_raw[4] = {0, 0, 0, 0};    // 22BC09 Nutzbytes 4..7
+  uint8_t beam_raw[4] = {0, 0, 0, 0};    // 22BC09 Nutzbytes 8..11
   uint8_t switch_raw[4] = {0, 0, 0, 0};  // 22BC05 (Lichtschalter?) Nutzbytes 4..7
   bool has_switch = false;
   uint8_t body_raw[4] = {0, 0, 0, 0};  // 22BC03 Nutzbytes 4..7 zum Bestaetigen am Auto
