@@ -1173,33 +1173,28 @@ void page_car(const Vehicle& v) {
       }
     }
   }
-  // Scheinwerfer: Kegel nach vorn (links), zum Ende hin schwaecher und breiter;
-  // Fernlicht weiter, heller und weisser. Ohne Antwort auf 22BC09 wie bisher:
-  // Licht an = Abblendlicht.
-  bool high = v.has_beam && v.high_beam;
-  bool low = v.has_beam ? v.low_beam : v.lights_on;
-  bool parking = v.lights_on && !low && !high;  // nur Standlicht
-  if (low || high) {
-    int reach = high ? 230 : 170;
+  // Licht an (BC03): Kegel nach vorn (links), zum Ende hin schwaecher und
+  // breiter. Stand- und Abblendlicht lassen sich am Ioniq 6 noch nicht
+  // unterscheiden (FW 90 versuchte es mit den Kona-Bits, die passen nicht).
+  bool low = v.lights_on;
+  bool drl = !low && v.has_beam && v.drl;  // Tagfahrlicht: nur helle Punkte vorn
+  if (low) {
+    constexpr int REACH = 170;
     for (int side = 0; side < 2; side++) {
       int sy = CAR_Y + (side ? 176 : 30), dir = side ? 1 : -1;
-      for (int i = 0; i < reach; i++) {
-        int h = 4 + i * (high ? 36 : 44) / reach, mid = sy + dir * i / (high ? 10 : 7);  // leicht nach aussen
-        uint16_t c = high ? mix(8, 20, 24, 250, 250, 235, reach - i, reach + 10)
-                          : mix(8, 20, 24, 255, 236, 150, reach - i, reach + 30);
-        gfx->drawFastVLine(CAR_X + 8 - i, mid - h / 2, h, c);
+      for (int i = 0; i < REACH; i++) {
+        int h = 4 + i * 44 / REACH, mid = sy + dir * i / 7;  // leicht nach aussen
+        gfx->drawFastVLine(CAR_X + 8 - i, mid - h / 2, h, mix(8, 20, 24, 255, 236, 150, REACH - i, REACH + 30));
       }
     }
   }
-  // Standlicht (Positionsleuchten): helle Punkte an den Scheinwerfern mit
-  // kleinem Schein, kein Kegel
-  if (v.lights_on) {
+  if (low || drl) {
     for (int side = 0; side < 2; side++) {
       int sy = CAR_Y + (side ? 176 : 30);
-      if (parking)
+      if (drl)
         for (int g = 1; g <= 16; g++)
-          gfx->drawFastVLine(CAR_X + 6 - g, sy - 9 - g / 2, 18 + g, mix(8, 20, 24, 255, 236, 180, 17 - g, 24));
-      for (int k = -1; k <= 1; k++) gfx->fillRect(CAR_X + 6, sy + k * 6 - 2, 4, 4, gfx->color565(255, 244, 210));
+          gfx->drawFastVLine(CAR_X + 6 - g, sy - 9 - g / 2, 18 + g, mix(8, 20, 24, 235, 240, 255, 17 - g, 24));
+      for (int k = -1; k <= 1; k++) gfx->fillRect(CAR_X + 6, sy + k * 6 - 2, 4, 4, gfx->color565(250, 250, 255));
     }
   }
   // Rueckleuchten: Band an der Hinterkante entlang ihrer Rundung, an den
@@ -1260,14 +1255,11 @@ void page_car(const Vehicle& v) {
   else snprintf(buf, sizeof buf, "%s %s", T("Offen:", "Open:"), open.c_str());
   text(PAD, 438, F_MED, open.empty() ? C_GREEN : C_ORANGE, buf);
   int open_w = text_width(F_MED, buf);
-  const char* light = high      ? T("Fernlicht", "High beam")
-                      : low     ? (v.has_beam ? T("Abblendlicht", "Low beam") : T("Licht an", "Lights on"))
-                      : parking ? T("Standlicht", "Parking lights")
-                                : T("Licht aus", "Lights off");
+  const char* light = low ? T("Licht an", "Lights on") : drl ? T("Tagfahrlicht", "Daytime lights") : T("Licht aus", "Lights off");
   snprintf(buf, sizeof buf, "%s%s", light, v.brake_light ? T(", Bremse", ", brake") : "");
   // passt es nicht neben die offenen Tueren, eine Zeile hoeher
   int ly = PAD + open_w + 24 + text_width(F_MED, buf) > W - PAD ? 404 : 438;
-  text_right(W - PAD, ly, F_MED, high ? C_FG : (low || parking) ? C_YELLOW : C_DIM, buf);
+  text_right(W - PAD, ly, F_MED, low ? C_YELLOW : drl ? C_FG : C_DIM, buf);
   // Rohdaten zum Bestaetigen der Bits am Auto (Tuer oeffnen, Licht schalten)
   snprintf(buf, sizeof buf, "770 BC03: %02X %02X %02X %02X   BC10: %d", v.body_raw[0], v.body_raw[1], v.body_raw[2],
            v.body_raw[3], v.light_code);
