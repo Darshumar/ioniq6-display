@@ -1176,8 +1176,7 @@ void page_car(const Vehicle& v) {
   // Licht an (BC03): Kegel nach vorn (links), zum Ende hin schwaecher und
   // breiter. Stand- und Abblendlicht lassen sich am Ioniq 6 noch nicht
   // unterscheiden (FW 90 versuchte es mit den Kona-Bits, die passen nicht).
-  bool low = v.lights_on;
-  bool drl = !low && v.has_beam && v.drl;  // Tagfahrlicht: nur helle Punkte vorn
+  bool low = v.has_switch ? v.beam_on : v.lights_on;  // FW 96: Schalter-Byte, sonst wie bisher
   if (low) {
     constexpr int REACH = 170;
     for (int side = 0; side < 2; side++) {
@@ -1188,18 +1187,15 @@ void page_car(const Vehicle& v) {
       }
     }
   }
-  if (low || drl) {
+  if (low) {
     for (int side = 0; side < 2; side++) {
       int sy = CAR_Y + (side ? 176 : 30);
-      if (drl)
-        for (int g = 1; g <= 16; g++)
-          gfx->drawFastVLine(CAR_X + 6 - g, sy - 9 - g / 2, 18 + g, mix(8, 20, 24, 235, 240, 255, 17 - g, 24));
       for (int k = -1; k <= 1; k++) gfx->fillRect(CAR_X + 6, sy + k * 6 - 2, 4, 4, gfx->color565(250, 250, 255));
     }
   }
   // Rueckleuchten: Band an der Hinterkante entlang ihrer Rundung, an den
   // Ecken als "Parametric Pixels"; Bremslicht heller mit Schein nach hinten
-  if (v.lights_on || v.brake_light) {
+  if (low || v.brake_light) {
     constexpr int Y0 = 16, N = CAR_H - 2 * Y0;
     static int16_t edge[N];
     static bool have_edge = false;
@@ -1255,11 +1251,11 @@ void page_car(const Vehicle& v) {
   else snprintf(buf, sizeof buf, "%s %s", T("Offen:", "Open:"), open.c_str());
   text(PAD, 438, F_MED, open.empty() ? C_GREEN : C_ORANGE, buf);
   int open_w = text_width(F_MED, buf);
-  const char* light = low ? T("Licht an", "Lights on") : drl ? T("Tagfahrlicht", "Daytime lights") : T("Licht aus", "Lights off");
+  const char* light = low ? T("Licht an", "Lights on") : T("Licht aus", "Lights off");
   snprintf(buf, sizeof buf, "%s%s", light, v.brake_light ? T(", Bremse", ", brake") : "");
   // passt es nicht neben die offenen Tueren, eine Zeile hoeher
   int ly = PAD + open_w + 24 + text_width(F_MED, buf) > W - PAD ? 404 : 438;
-  text_right(W - PAD, ly, F_MED, low ? C_YELLOW : drl ? C_FG : C_DIM, buf);
+  text_right(W - PAD, ly, F_MED, low ? C_YELLOW : C_DIM, buf);
   // Rohdaten zum Bestaetigen der Bits am Auto (Tuer oeffnen, Licht schalten)
   snprintf(buf, sizeof buf, "770 BC03: %02X %02X %02X %02X   BC10: %d", v.body_raw[0], v.body_raw[1], v.body_raw[2],
            v.body_raw[3], v.light_code);
