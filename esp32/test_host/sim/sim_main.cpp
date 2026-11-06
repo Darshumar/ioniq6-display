@@ -124,10 +124,10 @@ int main() {
   {  // Auto von oben: Licht an, alles zu; dann Fahrertuer, hinten rechts und Kofferraum offen, Bremse
     Vehicle car = veh;
     car.has_body = car.has_lights = true; car.light_code = 0;
-    car.has_beam = car.has_switch = true; car.drl = true; car.beam_raw[3] = 0x30;  // Werte vom 05.11.
-    ui::dashboard(b, c, cs, t, cells, car, demo_log, true, ui::PAGE_CAR); save("auto_tagfahrlicht.ppm");
-    car.lights_on = true; car.light_code = 15; car.body_raw[2] = 0x04;
-    car.drl = false; car.beam_raw[2] = 0xC0; car.beam_raw[3] = 0;
+    car.has_switch = true; car.lights_on = true; car.body_raw[2] = 0x04;  // AUTO bei Tag (06.11.)
+    car.switch_raw[1] = 0x40;
+    ui::dashboard(b, c, cs, t, cells, car, demo_log, true, ui::PAGE_CAR); save("auto_tag.ppm");
+    car.light_code = 15; car.beam_on = true; car.switch_raw[1] = 0xC0;  // AUTO im Dunkeln
     ui::dashboard(b, c, cs, t, cells, car, demo_log, true, ui::PAGE_CAR); save("page7_auto.ppm");
     car.door[0] = car.door[3] = car.trunk = true; car.brake_light = true;
     car.body_raw[0] = 0xA4;

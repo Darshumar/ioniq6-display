@@ -989,12 +989,12 @@ void run_job(int j, BmsData& d, std::vector<std::string>& raw) {
       if (got && page == ui::PAGE_CAR) {
         if (query("22BC06", "778", p, 1, 1500) && decode_770(p, veh)) raw[22] = to_hex(p);
         if (query("22BC10", "778", p, 1, 1500) && decode_770(p, veh)) raw[23] = to_hex(p);
-        veh.has_switch = query("22BC05", "778", p, 1, 1500) && decode_770(p, veh);
-        if (veh.has_switch) raw[26] = to_hex(p);
       }
-      // Scheinwerfer (Standlicht/Abblend/Fern, FW 90): bei Licht an in jedem
-      // Tuer-Takt, damit es auch im Log steht, sonst nur auf der Auto-Seite
-      if (got && (veh.lights_on || page == ui::PAGE_CAR)) {
+      // Lichtschalter (FW 96): zeigt, ob das Abblendlicht wirklich brennt; jeden Tuer-Takt
+      veh.has_switch = got && query("22BC05", "778", p, 1, 1500) && decode_770(p, veh);
+      if (veh.has_switch) raw[26] = to_hex(p);
+      // Leuchten-Rohwerte (22BC09) nur noch auf der Auto-Seite
+      if (got && page == ui::PAGE_CAR) {
         veh.has_beam = query("22BC09", "778", p, 1, 1500) && decode_770(p, veh);
         if (veh.has_beam) raw[25] = to_hex(p);
       } else {

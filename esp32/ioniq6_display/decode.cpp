@@ -491,13 +491,14 @@ bool decode_770(const std::vector<uint8_t>& p, Vehicle& v) {
       for (int i = 0; i < 4; i++) v.body_raw[i] = 4 + i < (int)n ? d[4 + i] : 0;
       v.has_body = v.has_lights = true;
       return true;
-    case 0x05:  // Lichtschalter (Kona EV: bix 48), Bedeutung am Ioniq 6 noch offen
+    case 0x05:  // Lichtschalter; am Ioniq 6 d[5] 0x80 = Abblendlicht an (siehe decode.h)
+      if (n < 6) return false;
       for (int i = 0; i < 4; i++) v.switch_raw[i] = 4 + i < (int)n ? d[4 + i] : 0;
+      v.beam_on = d[5] & 0x80;
       v.has_switch = true;
       return true;
     case 0x09:  // Leuchten; am Ioniq 6 nicht wie beim Kona (siehe decode.h)
       if (n < 12) return false;
-      v.drl = d[11] & 0x30;
       for (int i = 0; i < 4; i++) v.beam_raw[i] = d[8 + i];
       v.has_beam = true;
       return true;
