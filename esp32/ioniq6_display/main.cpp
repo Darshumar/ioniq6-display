@@ -927,16 +927,25 @@ void run_job(int j, BmsData& d, std::vector<std::string>& raw) {
       if (!got) veh.has_speed = false;
       veh.ecu_7e2 = got;
       break;
-    case J_READY:
+    case J_READY: {
       target("744");
       got = query("22E004", "74C", p, 1, 1000) && decode_744(p, veh);
       if (got) raw[7] = to_hex(p);
-      else veh.relay = false;
       veh.has_relay = true;
-      if (veh.relay) ready_off = 0;
-      else if (ready_seen) ready_off++;
-      got = true;  // Schweigen heisst hier "aus", nicht "kann es nicht"
+      // Schweigen heisst "aus", aber nur im Stand. Dreht ein Motor, ist die
+      // Antwort nur verloren gegangen: alten Wert behalten und nicht als "aus"
+      // zaehlen (FW 97; 07.11. 15:17 drei Aussetzer in Folge bei 4000 U/min
+      // beendeten die Fahrt). Am echten Fahrtende meldet 744 das Relais mit
+      // 0 und die Motoren stehen.
+      bool moving = d.rpm_front != 0 || d.rpm_rear != 0;
+      if (got || !moving) {
+        if (!got) veh.relay = false;
+        if (veh.relay) ready_off = 0;
+        else if (ready_seen) ready_off++;
+      }
+      got = true;  // Schweigen ist kein Fehler des Steuergeraets
       break;
+    }
     case J_CLIMA:
       target("7B3");
       got = query("220100", "7BB", p, 1, 1500) && decode_7B3_0100(p, veh);
